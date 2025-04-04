@@ -75,22 +75,33 @@ class WebsiteCrawler:
             except Exception as e:
                 logger.error(f"Authentication failed: {e}")
 
-    def scrape_with_retry(self, url: str, max_retries: int = 3, retry_delay: int = 2) -> Dict:
+    def scrape_with_retry(self, url: str, screenshot_path: str, pdf_path: str, max_retries: int = 3, retry_delay: int = 2) -> Dict:
         """Attempt to scrape a URL with retries on failure.
         
         Args:
             url: URL to scrape
+            screenshot_path: Path where to save the screenshot
+            pdf_path: Path where to save the PDF
             max_retries: Maximum number of retry attempts
             retry_delay: Delay between retries in seconds
             
         Returns:
             Result dictionary or None if all attempts fail
         """
+        logger.info(f"Scraping URL: {url}")
+        logger.info(f"Screenshot will be saved to: {screenshot_path}")
+        logger.info(f"PDF will be saved to: {pdf_path}")
+        
         attempts = 0
         while attempts < max_retries:
             try:
-                # Call synchronous method - no await
-                result = self.crawler.scrape_url(url=url)
+                # Try with minimal parameters but explicitly specify output paths
+                result = self.crawler.scrape_url(
+                    url=url,
+                    output_screenshot=screenshot_path,
+                    output_pdf=pdf_path
+                )
+                logger.info(f"Scrape successful, result type: {type(result)}")
                 return result
             except Exception as e:
                 attempts += 1
@@ -141,20 +152,19 @@ class WebsiteCrawler:
                 screenshot_path = self.screenshots_dir / f"{filename}.{DOCUMENT_PROCESSOR_SETTINGS['image_format']}"
                 pdf_path = self.pdfs_dir / f"{filename}.pdf"
                 
-                # Log generated paths for debugging
-                logger.debug(f"Expected screenshot path: {screenshot_path}")
-                logger.debug(f"Expected PDF path: {pdf_path}")
+                # Convert paths to strings for FirecrawlApp
+                screenshot_path_str = str(screenshot_path)
+                pdf_path_str = str(pdf_path)
                 
                 # Try to scrape with retries - synchronous call, no await
-                result = self.scrape_with_retry(url)
-                
-                # Log the result structure for debugging
-                logger.debug(f"Scrape result type: {type(result)}")
-                if isinstance(result, dict):
-                    logger.debug(f"Scrape result keys: {list(result.keys())}")
+                result = self.scrape_with_retry(
+                    url, 
+                    screenshot_path=screenshot_path_str, 
+                    pdf_path=pdf_path_str
+                )
                 
                 # Wait a moment for files to be written - use asyncio.sleep since we're in an async method
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 
                 # Check if files were created during scraping
                 if screenshot_path.exists():
@@ -162,26 +172,26 @@ class WebsiteCrawler:
                     screenshot_files.append(screenshot_path)
                 else:
                     logger.warning(f"Screenshot not found at expected path: {screenshot_path}")
+                    logger.info("Checking filesystem for any similar files...")
                     
-                    # Try to extract path from result if available
-                    if isinstance(result, dict) and result.get("screenshot"):
-                        alt_path = Path(result["screenshot"])
-                        if alt_path.exists():
-                            logger.info(f"Found screenshot at alternate path: {alt_path}")
-                            screenshot_files.append(alt_path)
+                    # Look for any PNG files in the screenshots directory with a similar name
+                    for file in self.screenshots_dir.glob(f"*{filename}*.png"):
+                        logger.info(f"Found similar screenshot: {file}")
+                        screenshot_files.append(file)
+                        break
                 
                 if pdf_path.exists():
                     logger.info(f"PDF saved: {pdf_path}")
                     pdf_files.append(pdf_path)
                 else:
                     logger.warning(f"PDF not found at expected path: {pdf_path}")
+                    logger.info("Checking filesystem for any similar files...")
                     
-                    # Try to extract path from result if available
-                    if isinstance(result, dict) and result.get("pdf"):
-                        alt_path = Path(result["pdf"])
-                        if alt_path.exists():
-                            logger.info(f"Found PDF at alternate path: {alt_path}")
-                            pdf_files.append(alt_path)
+                    # Look for any PDF files in the pdfs directory with a similar name
+                    for file in self.pdfs_dir.glob(f"*{filename}*.pdf"):
+                        logger.info(f"Found similar PDF: {file}")
+                        pdf_files.append(file)
+                        break
                     
             except Exception as e:
                 logger.error(f"Error processing URL {url}: {e}")
@@ -208,30 +218,39 @@ class WebsiteCrawler:
             screenshot_path = self.screenshots_dir / f"{filename}.{DOCUMENT_PROCESSOR_SETTINGS['image_format']}"
             pdf_path = self.pdfs_dir / f"{filename}.pdf"
 
+            # Convert paths to strings for FirecrawlApp
+            screenshot_path_str = str(screenshot_path)
+            pdf_path_str = str(pdf_path)
+
             # Set up authentication if needed
             await self.setup_authentication()
 
-            # Try to scrape with retries - synchronous call, no await
-            result = self.scrape_with_retry(url)
+            # Try to scrape with retries - synchronous call with explicit output paths
+            result = self.scrape_with_retry(
+                url, 
+                screenshot_path=screenshot_path_str, 
+                pdf_path=pdf_path_str
+            )
             
             # Wait a moment for files to be written
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
             
             # Check if files were created
             screenshot_exists = screenshot_path.exists()
             pdf_exists = pdf_path.exists()
             
-            if not screenshot_exists and isinstance(result, dict) and result.get("screenshot"):
-                alt_path = Path(result["screenshot"])
-                if alt_path.exists():
-                    screenshot_path = alt_path
+            # Look for similar files if exact matches not found
+            if not screenshot_exists:
+                for file in self.screenshots_dir.glob(f"*{filename}*.png"):
+                    screenshot_path = file
                     screenshot_exists = True
+                    break
             
-            if not pdf_exists and isinstance(result, dict) and result.get("pdf"):
-                alt_path = Path(result["pdf"])
-                if alt_path.exists():
-                    pdf_path = alt_path
+            if not pdf_exists:
+                for file in self.pdfs_dir.glob(f"*{filename}*.pdf"):
+                    pdf_path = file
                     pdf_exists = True
+                    break
             
             return screenshot_path if screenshot_exists else None, pdf_path if pdf_exists else None
 
