@@ -132,8 +132,9 @@ class WebsiteCrawler:
         # Start crawling
         logger.info(f"Starting crawler with {len(start_urls)} seed URLs, max_depth={max_depth}, max_pages={max_pages}")
 
-        # Run the crawler - pass parameters via params
-        result = await self.crawler.crawl(urls=start_urls, params=params)
+        # Run the crawler - use scrape_urls method which matches the actual API
+        # According to the error logs, FirecrawlApp doesn't have a 'crawl' method
+        result = await self.crawler.scrape_urls(urls=start_urls, params=params)
 
         # Extract file paths from results
         screenshot_files = []
@@ -146,6 +147,10 @@ class WebsiteCrawler:
                     screenshot_files.append(Path(page.screenshot))
                 if hasattr(page, 'pdf') and page.pdf:
                     pdf_files.append(Path(page.pdf))
+        # Alternative result structure if the above doesn't work
+        elif isinstance(result, dict):
+            screenshot_files = [Path(file) for file in result.get("screenshots", [])]
+            pdf_files = [Path(file) for file in result.get("pdfs", [])]
 
         logger.info(f"Crawling complete. Captured {len(screenshot_files)} screenshots and {len(pdf_files)} PDFs")
 
@@ -185,7 +190,7 @@ class WebsiteCrawler:
             # Add viewport and user agent settings
             params.update(self.crawler_options)
 
-            # Capture the page - use params to pass options
+            # Capture the page - use scrape_url method which matches the actual API
             result = await self.crawler.scrape_url(url=url, params=params)
 
             logger.info(f"Successfully captured {url}")
@@ -204,8 +209,13 @@ class WebsiteCrawler:
         """Close the crawler and release resources."""
         if hasattr(self, 'crawler') and self.crawler:
             if hasattr(self.crawler, 'close') and callable(self.crawler.close):
-                await self.crawler.close()
-            logger.info("Crawler closed")
+                try:
+                    await self.crawler.close()
+                    logger.info("Crawler closed")
+                except Exception as e:
+                    logger.error(f"Error closing crawler: {e}")
+            else:
+                logger.info("Crawler does not have a close method, resources may not be properly released")
 
 async def run_crawler(start_urls: List[str], **kwargs) -> Tuple[List[Path], List[Path]]:
     """Run the crawler as a standalone function.
