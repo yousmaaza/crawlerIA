@@ -90,15 +90,8 @@ class WebsiteCrawler:
         attempts = 0
         while attempts < max_retries:
             try:
-                # Try a more compatible set of parameters for Firecrawl v1 API
-                result = await self.crawler.scrape_url(
-                    url=url,
-                    options={
-                        "output_format": "json",
-                        "screenshot": True,
-                        "pdf": True
-                    }
-                )
+                # Try with absolutely minimal parameters - just the URL
+                result = await self.crawler.scrape_url(url=url)
                 return result
             except Exception as e:
                 attempts += 1
@@ -148,11 +141,20 @@ class WebsiteCrawler:
                 screenshot_path = self.screenshots_dir / f"{filename}.{DOCUMENT_PROCESSOR_SETTINGS['image_format']}"
                 pdf_path = self.pdfs_dir / f"{filename}.pdf"
                 
+                # Log generated paths for debugging
+                logger.debug(f"Expected screenshot path: {screenshot_path}")
+                logger.debug(f"Expected PDF path: {pdf_path}")
+                
                 # Try to scrape with retries
                 result = await self.scrape_with_retry(url)
                 
+                # Log the result structure for debugging
+                logger.debug(f"Scrape result type: {type(result)}")
+                if isinstance(result, dict):
+                    logger.debug(f"Scrape result keys: {list(result.keys())}")
+                
                 # Wait a moment for files to be written
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
                 
                 # Check if files were created during scraping
                 if screenshot_path.exists():
@@ -209,11 +211,11 @@ class WebsiteCrawler:
             # Set up authentication if needed
             await self.setup_authentication()
 
-            # Try to scrape with retries
+            # Try to scrape with retries - just the URL parameter
             result = await self.scrape_with_retry(url)
             
             # Wait a moment for files to be written
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
             
             # Check if files were created
             screenshot_exists = screenshot_path.exists()
@@ -273,7 +275,7 @@ if __name__ == "__main__":
     from config.config import DOCUMENT_PROCESSOR_SETTINGS
 
     async def main():
-        # Use a more reliable example site
+        # Use a simpler example site that's likely to work
         urls = ["https://example.com"]
         screenshot_paths, pdf_paths = await run_crawler(
             start_urls=urls,
