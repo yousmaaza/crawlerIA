@@ -13,6 +13,9 @@ from loguru import logger
 from src.crawler.crawler import WebsiteCrawler, run_crawler
 from config.config import CRAWLER_SETTINGS, SCREENSHOTS_DIR
 
+# Mark all tests in this file as unit tests and crawler tests
+pytestmark = [pytest.mark.unit, pytest.mark.crawler]
+
 
 class TestWebsiteCrawler(unittest.TestCase):
     """Test cases for the WebsiteCrawler class."""
