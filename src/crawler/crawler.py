@@ -33,28 +33,12 @@ class WebsiteCrawler:
         # Create the crawler instance with minimal parameters
         self.crawler = FirecrawlApp(api_key=api_key)
         
-        # Store crawler options for later use in crawl parameters
-        self.crawler_options = {
-            "viewport": {
-                "width": self.config["viewport_width"],
-                "height": self.config["viewport_height"]
-            },
-            "user_agent": self.config["user_agent"],
-            "max_concurrent_pages": self.config["max_concurrent_pages"],
-            "respect_robots_txt": self.config["respect_robots_txt"]
-        }
-
-        # Configure screenshot options
-        self.screenshot_options = {
-            "output_dir": str(self.screenshots_dir),
-            "format": DOCUMENT_PROCESSOR_SETTINGS["image_format"],
-            "quality": DOCUMENT_PROCESSOR_SETTINGS["image_quality"],
-            "full_page": True
-        }
-
-        self.pdf_options = {
-            "output_dir": str(self.pdfs_dir)
-        }
+        # Store crawler options for later use
+        self.viewport_width = self.config["viewport_width"]
+        self.viewport_height = self.config["viewport_height"]
+        self.user_agent = self.config["user_agent"]
+        self.wait_for_idle = self.config["wait_for_idle"]
+        self.headless = self.config["headless"]
 
         # Load cookies if provided
         if self.config["cookies_file"]:
@@ -111,48 +95,35 @@ class WebsiteCrawler:
         # Set up authentication if needed
         await self.setup_authentication()
 
-        # Prepare crawl parameters
-        params = {
-            "max_depth": max_depth,
-            "max_pages": max_pages,
-            "wait_time": self.config["wait_for_idle"],
-            "headless": self.config["headless"],
-            "output_screenshots": True,
-            "output_pdfs": True,
-            "screenshots_dir": str(self.screenshots_dir),
-            "pdfs_dir": str(self.pdfs_dir)
-        }
-        
-        if allowed_domains:
-            params["allowed_domains"] = allowed_domains
-
-        # Add viewport and user agent settings
-        params.update(self.crawler_options)
-
         # Start crawling
         logger.info(f"Starting crawler with {len(start_urls)} seed URLs, max_depth={max_depth}, max_pages={max_pages}")
 
-        # Run the crawler - use scrape_url method for each URL in start_urls
+        # Initialize empty lists for results
         screenshot_files = []
         pdf_files = []
         
         for url in start_urls:
             try:
-                # Handle each URL individually using the scrape_url method
-                result = await self.crawler.scrape_url(url=url, params=params)
+                # Based on error message, we need to simplify parameters to match API expectations
+                # Note: FirecrawlApp v1 API appears to have different parameter structure
                 
-                # Process results to get file paths - adjust based on actual API response format
-                if hasattr(result, "screenshot") and result.screenshot:
-                    screenshot_files.append(Path(result.screenshot))
-                if hasattr(result, "pdf") and result.pdf:
-                    pdf_files.append(Path(result.pdf))
+                # Generate clean filenames
+                filename = get_clean_filename(url)
+                screenshot_path = self.screenshots_dir / f"{filename}.{DOCUMENT_PROCESSOR_SETTINGS['image_format']}"
+                pdf_path = self.pdfs_dir / f"{filename}.pdf"
                 
-                # Alternative result structure if the above doesn't work
-                elif isinstance(result, dict):
-                    if "screenshot" in result and result["screenshot"]:
-                        screenshot_files.append(Path(result["screenshot"]))
-                    if "pdf" in result and result["pdf"]:
-                        pdf_files.append(Path(result["pdf"]))
+                # Handle each URL individually with minimal parameters
+                result = await self.crawler.scrape_url(url=url)
+                
+                # Log success
+                logger.info(f"Successfully scraped URL: {url}")
+                
+                # Check if files were created during scraping
+                if screenshot_path.exists():
+                    screenshot_files.append(screenshot_path)
+                if pdf_path.exists():
+                    pdf_files.append(pdf_path)
+                    
             except Exception as e:
                 logger.error(f"Error processing URL {url}: {e}")
 
@@ -181,21 +152,8 @@ class WebsiteCrawler:
             # Set up authentication if needed
             await self.setup_authentication()
 
-            # Prepare scrape parameters
-            params = {
-                "wait_time": self.config["wait_for_idle"],
-                "headless": self.config["headless"],
-                "output_screenshots": True,
-                "output_pdfs": True,
-                "screenshots_dir": str(self.screenshots_dir),
-                "pdfs_dir": str(self.pdfs_dir)
-            }
-            
-            # Add viewport and user agent settings
-            params.update(self.crawler_options)
-
-            # Capture the page - use scrape_url method which matches the actual API
-            result = await self.crawler.scrape_url(url=url, params=params)
+            # Capture the page with minimal parameters
+            result = await self.crawler.scrape_url(url=url)
 
             logger.info(f"Successfully captured {url}")
             
@@ -212,14 +170,15 @@ class WebsiteCrawler:
     async def close(self):
         """Close the crawler and release resources."""
         if hasattr(self, 'crawler') and self.crawler:
-            if hasattr(self.crawler, 'close') and callable(self.crawler.close):
-                try:
+            try:
+                # Try different approaches to close resources
+                if hasattr(self.crawler, 'close') and callable(self.crawler.close):
                     await self.crawler.close()
                     logger.info("Crawler closed")
-                except Exception as e:
-                    logger.error(f"Error closing crawler: {e}")
-            else:
-                logger.info("Crawler does not have a close method, resources may not be properly released")
+                else:
+                    logger.info("Crawler does not have a close method, resources may not be properly released")
+            except Exception as e:
+                logger.error(f"Error closing crawler: {e}")
 
 async def run_crawler(start_urls: List[str], **kwargs) -> Tuple[List[Path], List[Path]]:
     """Run the crawler as a standalone function.
