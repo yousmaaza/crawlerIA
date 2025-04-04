@@ -105,6 +105,8 @@ class WebsiteCrawler:
                     # Check for content in the result
                     if 'html' in result:
                         logger.info(f"HTML content length: {len(result['html'])}")
+                    if 'markdown' in result:
+                        logger.info(f"Markdown content length: {len(result['markdown'])}")
                     if 'screenshot' in result:
                         if isinstance(result['screenshot'], str):
                             logger.info(f"Screenshot content type: string, length: {len(result['screenshot'])}")
@@ -118,6 +120,8 @@ class WebsiteCrawler:
                             logger.info(f"PDF content type: string, length: {len(result['pdf'])}")
                         elif isinstance(result['pdf'], bytes):
                             logger.info(f"PDF content type: bytes, length: {len(result['pdf'])}")
+                    if 'metadata' in result:
+                        logger.info(f"Metadata keys: {list(result['metadata'].keys()) if isinstance(result['metadata'], dict) else 'Not a dictionary'}")
                 
                 return result
             except Exception as e:
@@ -132,6 +136,66 @@ class WebsiteCrawler:
                 else:
                     logger.error(f"All {max_retries} attempts failed for {url}")
                     raise
+
+    def create_screenshot_from_html(self, html_content: str, output_path: str) -> bool:
+        """Generate a screenshot from HTML content.
+        
+        Args:
+            html_content: HTML content to render
+            output_path: Path to save the screenshot
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Write HTML to a temporary file
+            temp_html_path = str(Path(output_path).parent / f"temp_{Path(output_path).name}.html")
+            with open(temp_html_path, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+                
+            logger.info(f"Created temporary HTML file at {temp_html_path}")
+            
+            # Try to use a local browser automation library if available
+            # This would ideally be done with a library like playwright or selenium
+            # But for this example, we'll just indicate it's not implemented
+            logger.warning("HTML to screenshot conversion not implemented - requires browser automation")
+            
+            # Clean up temp file
+            if os.path.exists(temp_html_path):
+                os.remove(temp_html_path)
+                
+            return False
+        except Exception as e:
+            logger.error(f"Failed to create screenshot from HTML: {e}")
+            return False
+
+    def create_pdf_from_markdown(self, markdown_content: str, output_path: str) -> bool:
+        """Generate a PDF from Markdown content.
+        
+        Args:
+            markdown_content: Markdown content to convert
+            output_path: Path to save the PDF
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Write markdown to a file
+            markdown_path = str(Path(output_path).parent / f"{Path(output_path).stem}.md")
+            with open(markdown_path, 'w', encoding='utf-8') as f:
+                f.write(markdown_content)
+                
+            logger.info(f"Saved markdown content to {markdown_path}")
+            
+            # For a complete solution, you would convert markdown to PDF
+            # This would require a library like markdown-pdf or pandoc
+            # For this example, we'll just indicate it's not implemented
+            logger.warning("Markdown to PDF conversion not implemented - requires PDF conversion library")
+            
+            return False
+        except Exception as e:
+            logger.error(f"Failed to create PDF from markdown: {e}")
+            return False
 
     def save_base64_to_file(self, base64_string: str, output_path: str) -> bool:
         """Save base64 encoded data to a file.
@@ -261,14 +325,46 @@ class WebsiteCrawler:
                 # Wait a moment after the API call
                 await asyncio.sleep(3)
                 
-                # Try to extract and save data from result
+                # Extract and save content from result
+                content_extracted = False
+                
                 if isinstance(result, dict):
+                    # If there's markdown content, save it as PDF
+                    if 'markdown' in result and result['markdown']:
+                        # Save markdown content directly
+                        markdown_path = self.pdfs_dir / f"{filename}.md"
+                        try:
+                            with open(markdown_path, 'w', encoding='utf-8') as f:
+                                f.write(result['markdown'])
+                            logger.info(f"Saved markdown content to {markdown_path}")
+                            
+                            # Try to convert markdown to PDF
+                            if self.create_pdf_from_markdown(result['markdown'], str(pdf_path)):
+                                logger.info(f"Converted markdown to PDF: {pdf_path}")
+                                pdf_files.append(pdf_path)
+                            else:
+                                # If conversion fails, at least we have the markdown
+                                logger.info(f"Using markdown file as PDF substitute")
+                                pdf_files.append(markdown_path)
+                                
+                            content_extracted = True
+                        except Exception as e:
+                            logger.error(f"Failed to save markdown: {e}")
+                    
+                    # If there's HTML content, try to create a screenshot
+                    if 'html' in result and result['html']:
+                        if self.create_screenshot_from_html(result['html'], str(screenshot_path)):
+                            logger.info(f"Created screenshot from HTML content: {screenshot_path}")
+                            screenshot_files.append(screenshot_path)
+                            content_extracted = True
+                            
                     # Handle screenshot data if available
                     if 'screenshot' in result and isinstance(result['screenshot'], str) and len(result['screenshot']) > 0:
                         # Try to save base64 data if present
                         if self.save_base64_to_file(result['screenshot'], str(screenshot_path)):
                             logger.info(f"Saved screenshot from API response to {screenshot_path}")
                             screenshot_files.append(screenshot_path)
+                            content_extracted = True
                             
                     # Handle PDF data if available
                     if 'pdf' in result and isinstance(result['pdf'], str) and len(result['pdf']) > 0:
@@ -276,6 +372,11 @@ class WebsiteCrawler:
                         if self.save_base64_to_file(result['pdf'], str(pdf_path)):
                             logger.info(f"Saved PDF from API response to {pdf_path}")
                             pdf_files.append(pdf_path)
+                            content_extracted = True
+                
+                # Check if we need to try fallback methods
+                if not content_extracted:
+                    logger.warning("No content extracted from the API response. Using fallback methods.")
                 
                 # Check if files were created during scraping
                 if screenshot_path.exists():
@@ -295,9 +396,10 @@ class WebsiteCrawler:
                         # Try to find similar files as last resort
                         logger.info("Checking filesystem for any similar files...")
                         for file in self.screenshots_dir.glob(f"*{filename}*.png"):
-                            logger.info(f"Found similar screenshot: {file}")
-                            screenshot_files.append(file)
-                            break
+                            if file not in screenshot_files:  # Avoid duplicates
+                                logger.info(f"Found similar screenshot: {file}")
+                                screenshot_files.append(file)
+                                break
                 
                 if pdf_path.exists():
                     if pdf_path not in pdf_files:  # Avoid duplicates
@@ -316,9 +418,10 @@ class WebsiteCrawler:
                         # Try to find similar files as last resort
                         logger.info("Checking filesystem for any similar PDF files...")
                         for file in self.pdfs_dir.glob(f"*{filename}*.pdf"):
-                            logger.info(f"Found similar PDF: {file}")
-                            pdf_files.append(file)
-                            break
+                            if file not in pdf_files:  # Avoid duplicates
+                                logger.info(f"Found similar PDF: {file}")
+                                pdf_files.append(file)
+                                break
                     
             except Exception as e:
                 logger.error(f"Error processing URL {url}: {e}")
@@ -351,19 +454,49 @@ class WebsiteCrawler:
             # Try to scrape with retries - synchronous call with minimal parameters
             result = self.scrape_with_retry(url)
             
-            # Try to extract and save data from result
+            # Extract and save content from result
+            content_extracted = False
+            
             if isinstance(result, dict):
+                # If there's markdown content, save it as PDF
+                if 'markdown' in result and result['markdown']:
+                    # Save markdown content directly
+                    markdown_path = self.pdfs_dir / f"{filename}.md"
+                    try:
+                        with open(markdown_path, 'w', encoding='utf-8') as f:
+                            f.write(result['markdown'])
+                        logger.info(f"Saved markdown content to {markdown_path}")
+                        
+                        # Try to convert markdown to PDF
+                        if self.create_pdf_from_markdown(result['markdown'], str(pdf_path)):
+                            logger.info(f"Converted markdown to PDF: {pdf_path}")
+                        else:
+                            # If conversion fails, use the markdown file
+                            pdf_path = markdown_path
+                            
+                        content_extracted = True
+                    except Exception as e:
+                        logger.error(f"Failed to save markdown: {e}")
+                
+                # If there's HTML content, try to create a screenshot
+                if 'html' in result and result['html']:
+                    if self.create_screenshot_from_html(result['html'], str(screenshot_path)):
+                        logger.info(f"Created screenshot from HTML content: {screenshot_path}")
+                        content_extracted = True
+                        
                 # Handle screenshot data if available
                 if 'screenshot' in result and isinstance(result['screenshot'], str) and len(result['screenshot']) > 0:
                     # Try to save base64 data if present
                     if self.save_base64_to_file(result['screenshot'], str(screenshot_path)):
                         logger.info(f"Saved screenshot from API response to {screenshot_path}")
+                        content_extracted = True
                 
                 # Handle PDF data if available
                 if 'pdf' in result and isinstance(result['pdf'], str) and len(result['pdf']) > 0:
                     # Try to save base64 data if present
                     if self.save_base64_to_file(result['pdf'], str(pdf_path)):
                         logger.info(f"Saved PDF from API response to {pdf_path}")
+                        content_extracted = True
             
             # Wait a moment for files to be written
             await asyncio.sleep(3)
@@ -392,6 +525,13 @@ class WebsiteCrawler:
                         pdf_path = file
                         pdf_exists = True
                         break
+                    
+                    # Check for markdown files if no PDF found
+                    if not pdf_exists:
+                        for file in self.pdfs_dir.glob(f"*{filename}*.md"):
+                            pdf_path = file
+                            pdf_exists = True
+                            break
             
             return screenshot_path if screenshot_exists else None, pdf_path if pdf_exists else None
 
