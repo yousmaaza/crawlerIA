@@ -6,6 +6,7 @@ import json
 import os
 import time
 import subprocess
+import base64
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
 from urllib.parse import urljoin, urlparse
@@ -96,6 +97,28 @@ class WebsiteCrawler:
                 # If FirecrawlApp doesn't accept any output parameters, we'll handle the file creation ourselves
                 result = self.crawler.scrape_url(url=url)
                 logger.info(f"Scrape successful, result type: {type(result)}")
+                
+                # Log the result keys and some sample values to understand the response structure
+                if isinstance(result, dict):
+                    logger.info(f"Result keys: {list(result.keys())}")
+                    
+                    # Check for content in the result
+                    if 'html' in result:
+                        logger.info(f"HTML content length: {len(result['html'])}")
+                    if 'screenshot' in result:
+                        if isinstance(result['screenshot'], str):
+                            logger.info(f"Screenshot content type: string, length: {len(result['screenshot'])}")
+                            # Check if it's base64 encoded
+                            if result['screenshot'].startswith('data:image') or ';base64,' in result['screenshot']:
+                                logger.info("Screenshot appears to be base64 encoded")
+                        elif isinstance(result['screenshot'], bytes):
+                            logger.info(f"Screenshot content type: bytes, length: {len(result['screenshot'])}")
+                    if 'pdf' in result:
+                        if isinstance(result['pdf'], str):
+                            logger.info(f"PDF content type: string, length: {len(result['pdf'])}")
+                        elif isinstance(result['pdf'], bytes):
+                            logger.info(f"PDF content type: bytes, length: {len(result['pdf'])}")
+                
                 return result
             except Exception as e:
                 attempts += 1
@@ -109,6 +132,37 @@ class WebsiteCrawler:
                 else:
                     logger.error(f"All {max_retries} attempts failed for {url}")
                     raise
+
+    def save_base64_to_file(self, base64_string: str, output_path: str) -> bool:
+        """Save base64 encoded data to a file.
+        
+        Args:
+            base64_string: Base64 encoded string data
+            output_path: Path to save the file
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Check if it's a data URL
+            if base64_string.startswith('data:'):
+                # Extract the base64 part after the comma
+                base64_part = base64_string.split(',')[1]
+            else:
+                base64_part = base64_string
+                
+            # Decode base64 to bytes
+            file_data = base64.b64decode(base64_part)
+            
+            # Write to file
+            with open(output_path, 'wb') as f:
+                f.write(file_data)
+                
+            logger.info(f"Successfully saved base64 data to {output_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save base64 data: {e}")
+            return False
 
     def fallback_capture_screenshot(self, url: str, output_path: str) -> bool:
         """Fallback method to capture screenshot.
@@ -207,10 +261,27 @@ class WebsiteCrawler:
                 # Wait a moment after the API call
                 await asyncio.sleep(3)
                 
+                # Try to extract and save data from result
+                if isinstance(result, dict):
+                    # Handle screenshot data if available
+                    if 'screenshot' in result and isinstance(result['screenshot'], str) and len(result['screenshot']) > 0:
+                        # Try to save base64 data if present
+                        if self.save_base64_to_file(result['screenshot'], str(screenshot_path)):
+                            logger.info(f"Saved screenshot from API response to {screenshot_path}")
+                            screenshot_files.append(screenshot_path)
+                            
+                    # Handle PDF data if available
+                    if 'pdf' in result and isinstance(result['pdf'], str) and len(result['pdf']) > 0:
+                        # Try to save base64 data if present
+                        if self.save_base64_to_file(result['pdf'], str(pdf_path)):
+                            logger.info(f"Saved PDF from API response to {pdf_path}")
+                            pdf_files.append(pdf_path)
+                
                 # Check if files were created during scraping
                 if screenshot_path.exists():
-                    logger.info(f"Screenshot saved: {screenshot_path}")
-                    screenshot_files.append(screenshot_path)
+                    if screenshot_path not in screenshot_files:  # Avoid duplicates
+                        logger.info(f"Screenshot found: {screenshot_path}")
+                        screenshot_files.append(screenshot_path)
                 else:
                     logger.warning(f"Screenshot not found at expected path: {screenshot_path}")
                     
@@ -229,8 +300,9 @@ class WebsiteCrawler:
                             break
                 
                 if pdf_path.exists():
-                    logger.info(f"PDF saved: {pdf_path}")
-                    pdf_files.append(pdf_path)
+                    if pdf_path not in pdf_files:  # Avoid duplicates
+                        logger.info(f"PDF found: {pdf_path}")
+                        pdf_files.append(pdf_path)
                 else:
                     logger.warning(f"PDF not found at expected path: {pdf_path}")
                     
@@ -278,6 +350,20 @@ class WebsiteCrawler:
 
             # Try to scrape with retries - synchronous call with minimal parameters
             result = self.scrape_with_retry(url)
+            
+            # Try to extract and save data from result
+            if isinstance(result, dict):
+                # Handle screenshot data if available
+                if 'screenshot' in result and isinstance(result['screenshot'], str) and len(result['screenshot']) > 0:
+                    # Try to save base64 data if present
+                    if self.save_base64_to_file(result['screenshot'], str(screenshot_path)):
+                        logger.info(f"Saved screenshot from API response to {screenshot_path}")
+                
+                # Handle PDF data if available
+                if 'pdf' in result and isinstance(result['pdf'], str) and len(result['pdf']) > 0:
+                    # Try to save base64 data if present
+                    if self.save_base64_to_file(result['pdf'], str(pdf_path)):
+                        logger.info(f"Saved PDF from API response to {pdf_path}")
             
             # Wait a moment for files to be written
             await asyncio.sleep(3)
