@@ -37,6 +37,7 @@ CRAWLER_SETTINGS = {
         "password": os.getenv("AUTH_PASSWORD", None),
     },
     "cookies_file": os.getenv("COOKIES_FILE", None),
+    "api_key": os.getenv("FIRECRAWL_API_KEY", None)
 }
 
 # Document processor settings

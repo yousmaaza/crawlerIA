@@ -31,7 +31,7 @@ class WebsiteCrawler:
         self.pdfs_dir = ensure_dir(PDFS_DIR)
         
         # API key handling
-        api_key = os.getenv("FIRECRAWL_API_KEY")
+        api_key = self.config.get("api_key", os.getenv("FIRECRAWL_API_KEY"))
         if not api_key:
             logger.warning("FIRECRAWL_API_KEY environment variable not set. API calls may fail.")
         
