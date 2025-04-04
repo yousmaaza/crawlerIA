@@ -2,12 +2,13 @@
 Document processor module for processing webpage screenshots using ColiVara.
 """
 import asyncio
+import os
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import colivara
-from colivara import DocumentProcessor, ProcessingConfig, Document
+from colivara import Document, ProcessingOptions, DocumentBatch, IndexOperations
 from loguru import logger
 from PIL import Image
 
@@ -26,19 +27,19 @@ class WebpageDocumentProcessor:
         self.config = config or DOCUMENT_PROCESSOR_SETTINGS
         
         # Initialize ColiVara client
-        colivara.api_key = self.config["colivara_api_key"]
-        colivara.base_url = self.config["colivara_endpoint"]
+        self.client = colivara.Client(
+            api_key=self.config["colivara_api_key"],
+            base_url=self.config["colivara_endpoint"]
+        )
         
         # Create processing configuration
-        self.processing_config = ProcessingConfig(
+        self.processing_options = ProcessingOptions(
             detect_tables=self.config["detect_tables"],
             detect_forms=self.config["detect_forms"],
             detect_images=self.config["detect_images"],
             detect_headings=self.config["detect_headings"],
+            visual_processing=True  # Enable visual processing for multimodal understanding
         )
-        
-        # Initialize document processor
-        self.processor = DocumentProcessor(config=self.processing_config)
         
         logger.info("Document processor initialized")
     
@@ -63,11 +64,20 @@ class WebpageDocumentProcessor:
                 new_height = int(img.height * ratio)
                 img = img.resize((self.config["max_image_width"], new_height))
                 
+            # Create document metadata
+            metadata = {
+                "source": str(image_path),
+                "type": "webpage",
+                "filename": image_path.name,
+                "date_processed": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
             # Process the image
-            document = await self.processor.process_image(
+            document = await self.client.process_image(
                 image=img,
                 document_id=image_path.stem,
-                metadata={"source": str(image_path), "type": "webpage"}
+                metadata=metadata,
+                options=self.processing_options
             )
             
             logger.info(f"Successfully processed {image_path}")
@@ -138,26 +148,44 @@ class WebpageDocumentProcessor:
         
         # Create or get existing index
         try:
-            index = await colivara.Index.create(name=index_name)
-            logger.info(f"Created new index: {index_name}")
-        except colivara.errors.ConflictError:
-            # Index already exists
-            indexes = await colivara.Index.list()
-            index = next((idx for idx in indexes if idx.name == index_name), None)
-            logger.info(f"Using existing index: {index_name}")
+            # Check if index exists
+            existing_indexes = await self.client.list_indexes()
+            index = next((idx for idx in existing_indexes if idx.name == index_name), None)
+            
+            if index:
+                logger.info(f"Using existing index: {index_name} (ID: {index.id})")
+            else:
+                # Create new index
+                index = await self.client.create_index(name=index_name)
+                logger.info(f"Created new index: {index_name} (ID: {index.id})")
+            
+        except Exception as e:
+            logger.error(f"Error handling index {index_name}: {e}")
+            raise
         
-        if not index:
-            raise ValueError(f"Failed to create or retrieve index '{index_name}'")
+        # Add documents to index in batches
+        index_ops = IndexOperations(index_id=index.id, client=self.client)
+        batch_size = min(10, self.config["batch_size"])  # Ensure reasonable batch size for indexing
         
-        # Add documents to index
-        for i, document in enumerate(documents):
+        for i, doc_batch in enumerate(batch_items(documents, batch_size)):
+            logger.info(f"Indexing batch {i+1}/{len(documents) // batch_size + 1}")
+            
             try:
-                await index.add_document(document)
-                logger.debug(f"Indexed document {i+1}/{len(documents)}: {document.id}")
+                # Create a document batch
+                batch = DocumentBatch(documents=doc_batch)
+                
+                # Add batch to index
+                result = await index_ops.add_documents(batch)
+                logger.debug(f"Indexed batch {i+1}: {result.processed_count} documents processed")
+                
+                # Add a small delay between batches to avoid rate limiting
+                if i < (len(documents) // batch_size):
+                    await asyncio.sleep(0.5)
+                    
             except Exception as e:
-                logger.error(f"Failed to index document {document.id}: {e}")
+                logger.error(f"Failed to index batch {i+1}: {e}")
         
-        logger.info(f"Completed indexing {len(documents)} documents")
+        logger.info(f"Completed indexing {len(documents)} documents to {index_name} (ID: {index.id})")
         return index.id
 
 async def process_screenshots(screenshot_paths: List[Path], index_name: Optional[str] = None) -> Tuple[List[Document], str]:
@@ -201,4 +229,4 @@ if __name__ == "__main__":
         documents, index_id = await process_screenshots(screenshot_paths)
         print(f"Processed {len(documents)} documents and indexed them with ID: {index_id}")
     
-    asyncio.run(main()) 
+    asyncio.run(main())
