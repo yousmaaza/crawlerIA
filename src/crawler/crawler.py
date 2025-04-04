@@ -132,25 +132,29 @@ class WebsiteCrawler:
         # Start crawling
         logger.info(f"Starting crawler with {len(start_urls)} seed URLs, max_depth={max_depth}, max_pages={max_pages}")
 
-        # Run the crawler - use scrape_urls method which matches the actual API
-        # According to the error logs, FirecrawlApp doesn't have a 'crawl' method
-        result = await self.crawler.scrape_urls(urls=start_urls, params=params)
-
-        # Extract file paths from results
+        # Run the crawler - use scrape_url method for each URL in start_urls
         screenshot_files = []
         pdf_files = []
         
-        # Process results to get file paths - adjust based on actual API
-        if hasattr(result, "pages"):
-            for page in result.pages:
-                if hasattr(page, 'screenshot') and page.screenshot:
-                    screenshot_files.append(Path(page.screenshot))
-                if hasattr(page, 'pdf') and page.pdf:
-                    pdf_files.append(Path(page.pdf))
-        # Alternative result structure if the above doesn't work
-        elif isinstance(result, dict):
-            screenshot_files = [Path(file) for file in result.get("screenshots", [])]
-            pdf_files = [Path(file) for file in result.get("pdfs", [])]
+        for url in start_urls:
+            try:
+                # Handle each URL individually using the scrape_url method
+                result = await self.crawler.scrape_url(url=url, params=params)
+                
+                # Process results to get file paths - adjust based on actual API response format
+                if hasattr(result, "screenshot") and result.screenshot:
+                    screenshot_files.append(Path(result.screenshot))
+                if hasattr(result, "pdf") and result.pdf:
+                    pdf_files.append(Path(result.pdf))
+                
+                # Alternative result structure if the above doesn't work
+                elif isinstance(result, dict):
+                    if "screenshot" in result and result["screenshot"]:
+                        screenshot_files.append(Path(result["screenshot"]))
+                    if "pdf" in result and result["pdf"]:
+                        pdf_files.append(Path(result["pdf"]))
+            except Exception as e:
+                logger.error(f"Error processing URL {url}: {e}")
 
         logger.info(f"Crawling complete. Captured {len(screenshot_files)} screenshots and {len(pdf_files)} PDFs")
 
