@@ -1,0 +1,29 @@
+# Core dependencies
+firecrawl==0.2.0  # For web crawling and capturing screenshots
+colivara==1.1.0  # For document understanding and visual processing
+transformers==4.38.0  # For DeepSeek-Janus integration
+torch>=2.0.0  # PyTorch for model inference
+pillow>=10.0.0  # Image processing
+langchain>=0.1.0  # For building the RAG pipeline
+
+# Web crawling extras
+playwright>=1.40.0  # Browser automation
+asyncio>=3.4.3  # Async programming
+pydantic>=2.0.0  # Data validation
+
+# Storage and retrieval
+faiss-cpu>=1.7.4  # Vector store for embeddings
+sentence-transformers>=2.2.2  # For text embeddings
+opencv-python>=4.8.0  # Image processing
+numpy>=1.24.0  # Numerical operations
+
+# Utilities
+python-dotenv>=1.0.0  # Environment variable management
+tqdm>=4.65.0  # Progress bars
+loguru>=0.7.0  # Logging
+tenacity>=8.2.0  # Retry logic
+
+# Development and testing
+pytest>=7.4.0  # Testing
+black>=23.7.0  # Code formatting
+pylint>=2.17.0  # Linting 
