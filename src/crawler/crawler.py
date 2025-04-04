@@ -69,14 +69,13 @@ class WebsiteCrawler:
                     "username": self.config["auth"]["username"],
                     "password": self.config["auth"]["password"]
                 }
-                # Pass authentication via parameters
-                # Note: Adjust this based on actual API requirements
-                await self.crawler.authenticate(**auth_params)
+                # Call synchronous method - FirecrawlApp seems to use synchronous methods
+                self.crawler.authenticate(**auth_params)
                 logger.info("Authentication successful")
             except Exception as e:
                 logger.error(f"Authentication failed: {e}")
 
-    async def scrape_with_retry(self, url: str, max_retries: int = 3, retry_delay: int = 2) -> Dict:
+    def scrape_with_retry(self, url: str, max_retries: int = 3, retry_delay: int = 2) -> Dict:
         """Attempt to scrape a URL with retries on failure.
         
         Args:
@@ -90,8 +89,8 @@ class WebsiteCrawler:
         attempts = 0
         while attempts < max_retries:
             try:
-                # Try with absolutely minimal parameters - just the URL
-                result = await self.crawler.scrape_url(url=url)
+                # Call synchronous method - no await
+                result = self.crawler.scrape_url(url=url)
                 return result
             except Exception as e:
                 attempts += 1
@@ -100,7 +99,8 @@ class WebsiteCrawler:
                     # Exponential backoff
                     wait_time = retry_delay * (2 ** (attempts - 1))
                     logger.info(f"Retrying in {wait_time} seconds...")
-                    await asyncio.sleep(wait_time)
+                    # Use time.sleep for synchronous delay
+                    time.sleep(wait_time)
                 else:
                     logger.error(f"All {max_retries} attempts failed for {url}")
                     raise
@@ -145,15 +145,15 @@ class WebsiteCrawler:
                 logger.debug(f"Expected screenshot path: {screenshot_path}")
                 logger.debug(f"Expected PDF path: {pdf_path}")
                 
-                # Try to scrape with retries
-                result = await self.scrape_with_retry(url)
+                # Try to scrape with retries - synchronous call, no await
+                result = self.scrape_with_retry(url)
                 
                 # Log the result structure for debugging
                 logger.debug(f"Scrape result type: {type(result)}")
                 if isinstance(result, dict):
                     logger.debug(f"Scrape result keys: {list(result.keys())}")
                 
-                # Wait a moment for files to be written
+                # Wait a moment for files to be written - use asyncio.sleep since we're in an async method
                 await asyncio.sleep(2)
                 
                 # Check if files were created during scraping
@@ -211,8 +211,8 @@ class WebsiteCrawler:
             # Set up authentication if needed
             await self.setup_authentication()
 
-            # Try to scrape with retries - just the URL parameter
-            result = await self.scrape_with_retry(url)
+            # Try to scrape with retries - synchronous call, no await
+            result = self.scrape_with_retry(url)
             
             # Wait a moment for files to be written
             await asyncio.sleep(2)
@@ -245,7 +245,8 @@ class WebsiteCrawler:
             try:
                 # Try different approaches to close resources
                 if hasattr(self.crawler, 'close') and callable(self.crawler.close):
-                    await self.crawler.close()
+                    # Call close synchronously if it exists
+                    self.crawler.close()
                     logger.info("Crawler closed")
                 else:
                     logger.info("Crawler does not have a close method, resources may not be properly released")
