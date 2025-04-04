@@ -3,9 +3,11 @@ Web crawler module for capturing screenshots and generating PDFs of web pages.
 """
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
 from urllib.parse import urljoin, urlparse
+
 from firecrawl import FirecrawlApp
 from loguru import logger
 
@@ -25,31 +27,24 @@ class WebsiteCrawler:
         self.screenshots_dir = ensure_dir(SCREENSHOTS_DIR)
         self.pdfs_dir = ensure_dir(PDFS_DIR)
 
-        # Configure Firecrawl
-        crawler_options = {
-            "headless": self.config["headless"],
-            "viewport_width": self.config["viewport_width"],
-            "viewport_height": self.config["viewport_height"],
+        # API key handling
+        api_key = os.getenv("FIRECRAWL_API_KEY")
+        
+        # Create the crawler instance with minimal parameters
+        self.crawler = FirecrawlApp(api_key=api_key)
+        
+        # Store crawler options for later use in crawl parameters
+        self.crawler_options = {
+            "viewport": {
+                "width": self.config["viewport_width"],
+                "height": self.config["viewport_height"]
+            },
             "user_agent": self.config["user_agent"],
             "max_concurrent_pages": self.config["max_concurrent_pages"],
-            "respect_robots_txt": self.config["respect_robots_txt"],
+            "respect_robots_txt": self.config["respect_robots_txt"]
         }
 
-        # Add authentication if provided
-        if self.config["auth"]["username"] and self.config["auth"]["password"]:
-            crawler_options.update({
-                "username": self.config["auth"]["username"],
-                "password": self.config["auth"]["password"]
-            })
-
-        # Add proxy if provided
-        if self.config["proxy"]:
-            crawler_options["proxy"] = self.config["proxy"]
-
-        # Create the crawler instance
-        self.crawler = FirecrawlApp(**crawler_options)
-
-        # Set up processor options
+        # Configure screenshot options
         self.screenshot_options = {
             "output_dir": str(self.screenshots_dir),
             "format": DOCUMENT_PROCESSOR_SETTINGS["image_format"],
@@ -73,13 +68,28 @@ class WebsiteCrawler:
         """
         try:
             with open(cookies_file, 'r') as f:
-                cookies = json.load(f)
-                # Adjust this method call based on FirecrawlApp's actual API
-                self.crawler.add_cookies(cookies)
-                logger.info(f"Loaded {len(cookies)} cookies from {cookies_file}")
+                cookies_data = json.load(f)
+                self.crawler.add_cookies(cookies_data)
+                logger.info(f"Loaded cookies from {cookies_file}")
         except Exception as e:
             logger.error(f"Failed to load cookies from {cookies_file}: {e}")
 
+    async def setup_authentication(self) -> None:
+        """Set up authentication if credentials are provided."""
+        if self.config["auth"]["username"] and self.config["auth"]["password"]:
+            try:
+                auth_params = {
+                    "username": self.config["auth"]["username"],
+                    "password": self.config["auth"]["password"]
+                }
+                # Pass authentication via parameters
+                # Note: Adjust this based on actual API requirements
+                await self.crawler.authenticate(**auth_params)
+                logger.info("Authentication successful")
+            except Exception as e:
+                logger.error(f"Authentication failed: {e}")
+
+    @safe_request
     async def crawl(self,
                    start_urls: List[str],
                    max_depth: int = 2,
@@ -98,31 +108,44 @@ class WebsiteCrawler:
         """
         max_pages = max_pages or self.config["max_pages_per_site"]
 
-        # Configure crawl options
-        crawl_options = {
-            "urls": start_urls,
+        # Set up authentication if needed
+        await self.setup_authentication()
+
+        # Prepare crawl parameters
+        params = {
             "max_depth": max_depth,
             "max_pages": max_pages,
             "wait_time": self.config["wait_for_idle"],
+            "headless": self.config["headless"],
+            "output_screenshots": True,
+            "output_pdfs": True,
+            "screenshots_dir": str(self.screenshots_dir),
+            "pdfs_dir": str(self.pdfs_dir)
         }
-
-        # Set up allowed domains if provided
+        
         if allowed_domains:
-            crawl_options["allowed_domains"] = allowed_domains
+            params["allowed_domains"] = allowed_domains
 
-        # Start crawling - modify this to match FirecrawlApp's actual API
+        # Add viewport and user agent settings
+        params.update(self.crawler_options)
+
+        # Start crawling
         logger.info(f"Starting crawler with {len(start_urls)} seed URLs, max_depth={max_depth}, max_pages={max_pages}")
 
-        # Configure processors
-        self.crawler.enable_screenshots(**self.screenshot_options)
-        self.crawler.enable_pdf_export(**self.pdf_options)
+        # Run the crawler - pass parameters via params
+        result = await self.crawler.crawl(urls=start_urls, params=params)
 
-        # Run the crawler
-        result = await self.crawler.crawl(**crawl_options)
-
-        # Get the output files - adjust these calls based on FirecrawlApp's actual API
-        screenshot_files = [Path(file) for file in result.get("screenshots", [])]
-        pdf_files = [Path(file) for file in result.get("pdfs", [])]
+        # Extract file paths from results
+        screenshot_files = []
+        pdf_files = []
+        
+        # Process results to get file paths - adjust based on actual API
+        if hasattr(result, "pages"):
+            for page in result.pages:
+                if hasattr(page, 'screenshot') and page.screenshot:
+                    screenshot_files.append(Path(page.screenshot))
+                if hasattr(page, 'pdf') and page.pdf:
+                    pdf_files.append(Path(page.pdf))
 
         logger.info(f"Crawling complete. Captured {len(screenshot_files)} screenshots and {len(pdf_files)} PDFs")
 
@@ -146,16 +169,32 @@ class WebsiteCrawler:
             screenshot_path = self.screenshots_dir / f"{filename}.{DOCUMENT_PROCESSOR_SETTINGS['image_format']}"
             pdf_path = self.pdfs_dir / f"{filename}.pdf"
 
-            # Capture the page - adjust this to match FirecrawlApp's actual API
-            result = await self.crawler.capture_page(
-                url=url,
-                screenshot_path=str(screenshot_path),
-                pdf_path=str(pdf_path),
-                wait_time=self.config["wait_for_idle"]
-            )
+            # Set up authentication if needed
+            await self.setup_authentication()
+
+            # Prepare scrape parameters
+            params = {
+                "wait_time": self.config["wait_for_idle"],
+                "headless": self.config["headless"],
+                "output_screenshots": True,
+                "output_pdfs": True,
+                "screenshots_dir": str(self.screenshots_dir),
+                "pdfs_dir": str(self.pdfs_dir)
+            }
+            
+            # Add viewport and user agent settings
+            params.update(self.crawler_options)
+
+            # Capture the page - use params to pass options
+            result = await self.crawler.scrape_url(url=url, params=params)
 
             logger.info(f"Successfully captured {url}")
-            return screenshot_path, pdf_path
+            
+            # Check if files were created
+            screenshot_exists = screenshot_path.exists()
+            pdf_exists = pdf_path.exists()
+            
+            return screenshot_path if screenshot_exists else None, pdf_path if pdf_exists else None
 
         except Exception as e:
             logger.error(f"Failed to capture page {url}: {e}")
@@ -163,8 +202,10 @@ class WebsiteCrawler:
 
     async def close(self):
         """Close the crawler and release resources."""
-        await self.crawler.close()
-        logger.info("Crawler closed")
+        if hasattr(self, 'crawler') and self.crawler:
+            if hasattr(self.crawler, 'close') and callable(self.crawler.close):
+                await self.crawler.close()
+            logger.info("Crawler closed")
 
 async def run_crawler(start_urls: List[str], **kwargs) -> Tuple[List[Path], List[Path]]:
     """Run the crawler as a standalone function.
@@ -189,7 +230,7 @@ if __name__ == "__main__":
     from config.config import DOCUMENT_PROCESSOR_SETTINGS
 
     async def main():
-        urls = ["https://www.carrefour.fr/promotions"]
+        urls = ["https://www.example.com"]
         screenshot_paths, pdf_paths = await run_crawler(
             start_urls=urls,
             max_depth=1,
