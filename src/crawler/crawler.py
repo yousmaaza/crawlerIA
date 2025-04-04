@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import time
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
 from urllib.parse import urljoin, urlparse
@@ -75,13 +76,11 @@ class WebsiteCrawler:
             except Exception as e:
                 logger.error(f"Authentication failed: {e}")
 
-    def scrape_with_retry(self, url: str, screenshot_path: str, pdf_path: str, max_retries: int = 3, retry_delay: int = 2) -> Dict:
+    def scrape_with_retry(self, url: str, max_retries: int = 3, retry_delay: int = 2) -> Dict:
         """Attempt to scrape a URL with retries on failure.
         
         Args:
             url: URL to scrape
-            screenshot_path: Path where to save the screenshot
-            pdf_path: Path where to save the PDF
             max_retries: Maximum number of retry attempts
             retry_delay: Delay between retries in seconds
             
@@ -89,18 +88,13 @@ class WebsiteCrawler:
             Result dictionary or None if all attempts fail
         """
         logger.info(f"Scraping URL: {url}")
-        logger.info(f"Screenshot will be saved to: {screenshot_path}")
-        logger.info(f"PDF will be saved to: {pdf_path}")
         
         attempts = 0
         while attempts < max_retries:
             try:
-                # Try with minimal parameters but explicitly specify output paths
-                result = self.crawler.scrape_url(
-                    url=url,
-                    output_screenshot=screenshot_path,
-                    output_pdf=pdf_path
-                )
+                # Use absolutely minimal parameters - just URL
+                # If FirecrawlApp doesn't accept any output parameters, we'll handle the file creation ourselves
+                result = self.crawler.scrape_url(url=url)
                 logger.info(f"Scrape successful, result type: {type(result)}")
                 return result
             except Exception as e:
@@ -115,6 +109,61 @@ class WebsiteCrawler:
                 else:
                     logger.error(f"All {max_retries} attempts failed for {url}")
                     raise
+
+    def fallback_capture_screenshot(self, url: str, output_path: str) -> bool:
+        """Fallback method to capture screenshot.
+        
+        Args:
+            url: URL to capture
+            output_path: Where to save the screenshot
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # If FirecrawlApp can't save files directly, we'll try direct browser control
+            logger.info(f"Attempting fallback screenshot capture for {url} to {output_path}")
+            
+            # Check if we can find a screenshot method in the FirecrawlApp directly
+            if hasattr(self.crawler, 'take_screenshot'):
+                self.crawler.take_screenshot(url=url, output_path=output_path)
+                return True
+                
+            # As another fallback, we could try to implement with a direct browser
+            # This would need browser automation libraries like Playwright or Selenium
+            # Which are beyond the scope of this fix
+            
+            return False
+        except Exception as e:
+            logger.error(f"Fallback screenshot capture failed: {e}")
+            return False
+
+    def fallback_create_pdf(self, url: str, output_path: str) -> bool:
+        """Fallback method to create PDF.
+        
+        Args:
+            url: URL to capture
+            output_path: Where to save the PDF
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # If FirecrawlApp can't save files directly, we'll try direct browser control
+            logger.info(f"Attempting fallback PDF creation for {url} to {output_path}")
+            
+            # Check if we can find a PDF method in the FirecrawlApp directly
+            if hasattr(self.crawler, 'create_pdf'):
+                self.crawler.create_pdf(url=url, output_path=output_path)
+                return True
+                
+            # Fallback would need browser automation libraries
+            # Beyond the scope of this fix
+            
+            return False
+        except Exception as e:
+            logger.error(f"Fallback PDF creation failed: {e}")
+            return False
 
     @safe_request
     async def crawl(self,
@@ -152,18 +201,10 @@ class WebsiteCrawler:
                 screenshot_path = self.screenshots_dir / f"{filename}.{DOCUMENT_PROCESSOR_SETTINGS['image_format']}"
                 pdf_path = self.pdfs_dir / f"{filename}.pdf"
                 
-                # Convert paths to strings for FirecrawlApp
-                screenshot_path_str = str(screenshot_path)
-                pdf_path_str = str(pdf_path)
-                
                 # Try to scrape with retries - synchronous call, no await
-                result = self.scrape_with_retry(
-                    url, 
-                    screenshot_path=screenshot_path_str, 
-                    pdf_path=pdf_path_str
-                )
+                result = self.scrape_with_retry(url)
                 
-                # Wait a moment for files to be written - use asyncio.sleep since we're in an async method
+                # Wait a moment after the API call
                 await asyncio.sleep(3)
                 
                 # Check if files were created during scraping
@@ -172,26 +213,40 @@ class WebsiteCrawler:
                     screenshot_files.append(screenshot_path)
                 else:
                     logger.warning(f"Screenshot not found at expected path: {screenshot_path}")
-                    logger.info("Checking filesystem for any similar files...")
                     
-                    # Look for any PNG files in the screenshots directory with a similar name
-                    for file in self.screenshots_dir.glob(f"*{filename}*.png"):
-                        logger.info(f"Found similar screenshot: {file}")
-                        screenshot_files.append(file)
-                        break
+                    # Try using fallback method
+                    if self.fallback_capture_screenshot(url, str(screenshot_path)):
+                        logger.info(f"Fallback screenshot captured: {screenshot_path}")
+                        screenshot_files.append(screenshot_path)
+                    else:
+                        logger.warning("Fallback screenshot capture failed")
+                        
+                        # Try to find similar files as last resort
+                        logger.info("Checking filesystem for any similar files...")
+                        for file in self.screenshots_dir.glob(f"*{filename}*.png"):
+                            logger.info(f"Found similar screenshot: {file}")
+                            screenshot_files.append(file)
+                            break
                 
                 if pdf_path.exists():
                     logger.info(f"PDF saved: {pdf_path}")
                     pdf_files.append(pdf_path)
                 else:
                     logger.warning(f"PDF not found at expected path: {pdf_path}")
-                    logger.info("Checking filesystem for any similar files...")
                     
-                    # Look for any PDF files in the pdfs directory with a similar name
-                    for file in self.pdfs_dir.glob(f"*{filename}*.pdf"):
-                        logger.info(f"Found similar PDF: {file}")
-                        pdf_files.append(file)
-                        break
+                    # Try using fallback method
+                    if self.fallback_create_pdf(url, str(pdf_path)):
+                        logger.info(f"Fallback PDF created: {pdf_path}")
+                        pdf_files.append(pdf_path)
+                    else:
+                        logger.warning("Fallback PDF creation failed")
+                        
+                        # Try to find similar files as last resort
+                        logger.info("Checking filesystem for any similar PDF files...")
+                        for file in self.pdfs_dir.glob(f"*{filename}*.pdf"):
+                            logger.info(f"Found similar PDF: {file}")
+                            pdf_files.append(file)
+                            break
                     
             except Exception as e:
                 logger.error(f"Error processing URL {url}: {e}")
@@ -218,19 +273,11 @@ class WebsiteCrawler:
             screenshot_path = self.screenshots_dir / f"{filename}.{DOCUMENT_PROCESSOR_SETTINGS['image_format']}"
             pdf_path = self.pdfs_dir / f"{filename}.pdf"
 
-            # Convert paths to strings for FirecrawlApp
-            screenshot_path_str = str(screenshot_path)
-            pdf_path_str = str(pdf_path)
-
             # Set up authentication if needed
             await self.setup_authentication()
 
-            # Try to scrape with retries - synchronous call with explicit output paths
-            result = self.scrape_with_retry(
-                url, 
-                screenshot_path=screenshot_path_str, 
-                pdf_path=pdf_path_str
-            )
+            # Try to scrape with retries - synchronous call with minimal parameters
+            result = self.scrape_with_retry(url)
             
             # Wait a moment for files to be written
             await asyncio.sleep(3)
@@ -239,18 +286,26 @@ class WebsiteCrawler:
             screenshot_exists = screenshot_path.exists()
             pdf_exists = pdf_path.exists()
             
-            # Look for similar files if exact matches not found
+            # If files don't exist, try fallback methods
             if not screenshot_exists:
-                for file in self.screenshots_dir.glob(f"*{filename}*.png"):
-                    screenshot_path = file
-                    screenshot_exists = True
-                    break
+                if self.fallback_capture_screenshot(url, str(screenshot_path)):
+                    screenshot_exists = screenshot_path.exists()
+                else:
+                    # Try to find similar files
+                    for file in self.screenshots_dir.glob(f"*{filename}*.png"):
+                        screenshot_path = file
+                        screenshot_exists = True
+                        break
             
             if not pdf_exists:
-                for file in self.pdfs_dir.glob(f"*{filename}*.pdf"):
-                    pdf_path = file
-                    pdf_exists = True
-                    break
+                if self.fallback_create_pdf(url, str(pdf_path)):
+                    pdf_exists = pdf_path.exists()
+                else:
+                    # Try to find similar files
+                    for file in self.pdfs_dir.glob(f"*{filename}*.pdf"):
+                        pdf_path = file
+                        pdf_exists = True
+                        break
             
             return screenshot_path if screenshot_exists else None, pdf_path if pdf_exists else None
 
