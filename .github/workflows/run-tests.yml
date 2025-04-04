@@ -1,0 +1,39 @@
+name: Run Tests
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main, test/* ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      CI: true
+      # Note: For security reasons, actual API keys should be set in GitHub Secrets
+      # FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+      # COLIVARA_API_KEY: ${{ secrets.COLIVARA_API_KEY }}
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-asyncio
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+    
+    - name: Run unit tests
+      run: |
+        pytest -m "unit" -v
+    
+    - name: Print test result message
+      run: |
+        echo "Unit tests completed. Integration tests will be skipped as they require API keys."
+        echo "To run integration tests locally, set the required API keys in your environment."
