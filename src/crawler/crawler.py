@@ -258,50 +258,58 @@ class WebsiteCrawler:
         logger.info(f"Successfully processed {len(processed_images)} out of {len(images_info)} images")
         return processed_images
 
-    async def _extract_screenshot(self, result: Dict) -> Optional[Path]:
-        """Extract and save screenshot from API result.
+    async def _capture_screenshot(self, url: str) -> Optional[Path]:
+        """Capture a screenshot of a webpage using Firecrawl.
         
         Args:
-            result: API response dictionary
+            url: URL to capture
             
         Returns:
-            Path to saved screenshot or None
+            Path to saved screenshot or None if failed
         """
-        if not isinstance(result, dict):
-            logger.warning("Result is not a dictionary, cannot extract screenshot")
-            return None
-            
-        if "screenshot" not in result:
-            logger.warning("No screenshot in API result")
-            return None
-            
         try:
-            # Extract screenshot data
-            screenshot_data = result["screenshot"]
-            
             # Generate filename
-            filename = get_clean_filename(result.get("url", "unknown"))
+            filename = get_clean_filename(url)
             screenshot_path = self.screenshots_dir / f"{filename}.png"
             
-            # Check if it's already base64 encoded
+            # Create screenshot scraper parameters
+            # This is a separate API call specifically for screenshots
+            # Adjust as needed based on Firecrawl's actual API
+            try:
+                # Try to use a dedicated screenshot method if available
+                if hasattr(self.crawler, 'capture_screenshot') and callable(getattr(self.crawler, 'capture_screenshot')):
+                    screenshot_data = self.crawler.capture_screenshot(url)
+                else:
+                    # Fall back to standard scrape but try to extract screenshot if included
+                    logger.debug("No dedicated screenshot method found, using standard scrape")
+                    result = self.crawler.scrape_url(url=url)
+                    screenshot_data = result.get("screenshot") if isinstance(result, dict) else None
+                    
+                if not screenshot_data:
+                    logger.warning(f"No screenshot data returned for {url}")
+                    return None
+            except Exception as e:
+                logger.error(f"Failed to capture screenshot for {url}: {e}")
+                return None
+                
+            # Save the screenshot
             if isinstance(screenshot_data, str) and screenshot_data.startswith("data:image"):
                 # Convert base64 to image and save
                 img = base64_to_image(screenshot_data)
                 img.save(screenshot_path)
-                logger.info(f"Saved screenshot to {screenshot_path}")
-                return screenshot_path
             elif isinstance(screenshot_data, bytes):
                 # Save binary data directly
                 with open(screenshot_path, "wb") as f:
                     f.write(screenshot_data)
-                logger.info(f"Saved binary screenshot to {screenshot_path}")
-                return screenshot_path
             else:
                 logger.warning(f"Unsupported screenshot format: {type(screenshot_data)}")
                 return None
                 
+            logger.info(f"Saved screenshot to {screenshot_path}")
+            return screenshot_path
+                
         except Exception as e:
-            logger.error(f"Failed to save screenshot: {e}")
+            logger.error(f"Failed to capture screenshot for {url}: {e}")
             return None
 
     async def crawl_url(self, url: str) -> Dict:
@@ -321,10 +329,10 @@ class WebsiteCrawler:
         # Generate clean filename from URL
         filename = get_clean_filename(url)
         
-        # Call the FirecrawlApp API with screenshot parameter
+        # Call the FirecrawlApp API
         try:
-            # Request a screenshot with the scrape
-            result = self.crawler.scrape_url(url=url, screenshot=True)
+            # Just use standard scrape_url without the screenshot parameter
+            result = self.crawler.scrape_url(url=url)
             
             # Log the type of content received
             logger.debug(f"Result type: {type(result)}")
@@ -337,13 +345,11 @@ class WebsiteCrawler:
             
             # Initialize saved files list
             saved_files = [json_path]
-            screenshot_path = None
             
-            # Save screenshot if available
-            if isinstance(result, dict) and "screenshot" in result:
-                screenshot_path = await self._extract_screenshot(result)
-                if screenshot_path:
-                    saved_files.append(screenshot_path)
+            # Capture screenshot as a separate step
+            screenshot_path = await self._capture_screenshot(url)
+            if screenshot_path:
+                saved_files.append(screenshot_path)
             
             # Extract markdown content if available
             if isinstance(result, dict) and 'markdown' in result and result['markdown']:
