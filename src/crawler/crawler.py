@@ -4,6 +4,7 @@ Web crawler module for capturing screenshots and generating PDFs of web pages.
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
 from urllib.parse import urljoin, urlparse
@@ -29,6 +30,8 @@ class WebsiteCrawler:
 
         # API key handling
         api_key = os.getenv("FIRECRAWL_API_KEY")
+        if not api_key:
+            logger.warning("FIRECRAWL_API_KEY environment variable not set. API calls may fail.")
         
         # Create the crawler instance with minimal parameters
         self.crawler = FirecrawlApp(api_key=api_key)
@@ -73,6 +76,42 @@ class WebsiteCrawler:
             except Exception as e:
                 logger.error(f"Authentication failed: {e}")
 
+    async def scrape_with_retry(self, url: str, max_retries: int = 3, retry_delay: int = 2) -> Dict:
+        """Attempt to scrape a URL with retries on failure.
+        
+        Args:
+            url: URL to scrape
+            max_retries: Maximum number of retry attempts
+            retry_delay: Delay between retries in seconds
+            
+        Returns:
+            Result dictionary or None if all attempts fail
+        """
+        attempts = 0
+        while attempts < max_retries:
+            try:
+                # Try a more compatible set of parameters for Firecrawl v1 API
+                result = await self.crawler.scrape_url(
+                    url=url,
+                    options={
+                        "output_format": "json",
+                        "screenshot": True,
+                        "pdf": True
+                    }
+                )
+                return result
+            except Exception as e:
+                attempts += 1
+                logger.warning(f"Attempt {attempts}/{max_retries} failed for {url}: {e}")
+                if attempts < max_retries:
+                    # Exponential backoff
+                    wait_time = retry_delay * (2 ** (attempts - 1))
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"All {max_retries} attempts failed for {url}")
+                    raise
+
     @safe_request
     async def crawl(self,
                    start_urls: List[str],
@@ -104,25 +143,43 @@ class WebsiteCrawler:
         
         for url in start_urls:
             try:
-                # Based on error message, we need to simplify parameters to match API expectations
-                # Note: FirecrawlApp v1 API appears to have different parameter structure
-                
                 # Generate clean filenames
                 filename = get_clean_filename(url)
                 screenshot_path = self.screenshots_dir / f"{filename}.{DOCUMENT_PROCESSOR_SETTINGS['image_format']}"
                 pdf_path = self.pdfs_dir / f"{filename}.pdf"
                 
-                # Handle each URL individually with minimal parameters
-                result = await self.crawler.scrape_url(url=url)
+                # Try to scrape with retries
+                result = await self.scrape_with_retry(url)
                 
-                # Log success
-                logger.info(f"Successfully scraped URL: {url}")
+                # Wait a moment for files to be written
+                await asyncio.sleep(1)
                 
                 # Check if files were created during scraping
                 if screenshot_path.exists():
+                    logger.info(f"Screenshot saved: {screenshot_path}")
                     screenshot_files.append(screenshot_path)
+                else:
+                    logger.warning(f"Screenshot not found at expected path: {screenshot_path}")
+                    
+                    # Try to extract path from result if available
+                    if isinstance(result, dict) and result.get("screenshot"):
+                        alt_path = Path(result["screenshot"])
+                        if alt_path.exists():
+                            logger.info(f"Found screenshot at alternate path: {alt_path}")
+                            screenshot_files.append(alt_path)
+                
                 if pdf_path.exists():
+                    logger.info(f"PDF saved: {pdf_path}")
                     pdf_files.append(pdf_path)
+                else:
+                    logger.warning(f"PDF not found at expected path: {pdf_path}")
+                    
+                    # Try to extract path from result if available
+                    if isinstance(result, dict) and result.get("pdf"):
+                        alt_path = Path(result["pdf"])
+                        if alt_path.exists():
+                            logger.info(f"Found PDF at alternate path: {alt_path}")
+                            pdf_files.append(alt_path)
                     
             except Exception as e:
                 logger.error(f"Error processing URL {url}: {e}")
@@ -152,14 +209,27 @@ class WebsiteCrawler:
             # Set up authentication if needed
             await self.setup_authentication()
 
-            # Capture the page with minimal parameters
-            result = await self.crawler.scrape_url(url=url)
-
-            logger.info(f"Successfully captured {url}")
+            # Try to scrape with retries
+            result = await self.scrape_with_retry(url)
+            
+            # Wait a moment for files to be written
+            await asyncio.sleep(1)
             
             # Check if files were created
             screenshot_exists = screenshot_path.exists()
             pdf_exists = pdf_path.exists()
+            
+            if not screenshot_exists and isinstance(result, dict) and result.get("screenshot"):
+                alt_path = Path(result["screenshot"])
+                if alt_path.exists():
+                    screenshot_path = alt_path
+                    screenshot_exists = True
+            
+            if not pdf_exists and isinstance(result, dict) and result.get("pdf"):
+                alt_path = Path(result["pdf"])
+                if alt_path.exists():
+                    pdf_path = alt_path
+                    pdf_exists = True
             
             return screenshot_path if screenshot_exists else None, pdf_path if pdf_exists else None
 
@@ -203,7 +273,8 @@ if __name__ == "__main__":
     from config.config import DOCUMENT_PROCESSOR_SETTINGS
 
     async def main():
-        urls = ["https://www.example.com"]
+        # Use a more reliable example site
+        urls = ["https://example.com"]
         screenshot_paths, pdf_paths = await run_crawler(
             start_urls=urls,
             max_depth=1,
