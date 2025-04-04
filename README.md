@@ -106,22 +106,24 @@ You can also use the system programmatically:
 import asyncio
 from src.main import MultimodalRAG
 
+
 async def example():
-    rag = MultimodalRAG()
-    
-    # Crawl a website
-    screenshots, pdfs = await rag.crawl_website("https://example.com", max_depth=2, max_pages=20)
-    
-    # Process screenshots
-    index_id = await rag.process_website_screenshots(screenshots, index_name="example_com")
-    
-    # Query the system
-    result = await rag.query("What is the main product offered?", index_name="example_com")
-    
-    print(result["response"])
-    
-    # Clean up
-    await rag.close()
+   rag = MultimodalRAG()
+
+   # Crawl a website
+   screenshots, pdfs = await rag.crawl_website("https://example.com", max_depth=2, max_pages=20)
+
+   # Process screenshots
+   index_id = await rag.process_website_screenshots(screenshots, index_name="example_com")
+
+   # Query the system
+   result = await rag.query("What is the main product offered?", index_name="example_com")
+
+   print(result["response"])
+
+   # Clean up
+   await rag.close()
+
 
 # Run the example
 asyncio.run(example())
