@@ -17,7 +17,8 @@ from config.config import (
     RETRIEVAL_SETTINGS,
     SCREENSHOTS_DIR,
     PDFS_DIR,
-    INDEXES_DIR
+    INDEXES_DIR,
+    IMAGES_DIR
 )
 from src.crawler.crawler import WebsiteCrawler, run_crawler
 from src.document_processor.processor import WebpageDocumentProcessor, process_screenshots
@@ -39,6 +40,7 @@ class MultimodalRAG:
         ensure_dir(SCREENSHOTS_DIR)
         ensure_dir(PDFS_DIR)
         ensure_dir(INDEXES_DIR)
+        ensure_dir(IMAGES_DIR)
         
         logger.info("Multimodal RAG system initialized")
     
@@ -85,8 +87,8 @@ class MultimodalRAG:
             self.response_generator = MultimodalResponseGenerator()
         return self.response_generator
     
-    async def crawl_website(self, url: str, max_depth: int = 2, max_pages: int = 20) -> Tuple[List[Path], List[Path]]:
-        """Crawl a website and capture screenshots and PDFs.
+    async def crawl_website(self, url: str, max_depth: int = 2, max_pages: int = 20) -> Tuple[List[Path], List[Path], List[Dict]]:
+        """Crawl a website and capture screenshots, PDFs, and extract images.
         
         Args:
             url: URL to crawl
@@ -94,20 +96,20 @@ class MultimodalRAG:
             max_pages: Maximum number of pages to crawl
             
         Returns:
-            Tuple of lists of paths to screenshots and PDFs
+            Tuple of lists of paths to saved files, screenshots, and extracted image info
         """
         logger.info(f"Crawling website: {url}")
         crawler = self._lazy_init_crawler()
         
         # Crawl the website
-        screenshots, pdfs = await crawler.crawl(
+        saved_files, screenshots, extracted_images = await crawler.crawl(
             start_urls=[url],
             max_depth=max_depth,
             max_pages=max_pages
         )
         
-        logger.info(f"Crawled {len(screenshots)} pages from {url}")
-        return screenshots, pdfs
+        logger.info(f"Crawled {len(screenshots)} pages and extracted {len(extracted_images)} images from {url}")
+        return saved_files, screenshots, extracted_images
     
     async def process_website_screenshots(self, screenshots: List[Path], index_name: Optional[str] = None) -> str:
         """Process website screenshots and index them.
@@ -133,6 +135,41 @@ class MultimodalRAG:
         index_id = await processor.index_documents(documents, index_name)
         
         logger.info(f"Processed and indexed {len(documents)} documents to {index_name}")
+        return index_id
+    
+    async def process_extracted_images(self, images_info: List[Dict], index_name: Optional[str] = None) -> str:
+        """Process extracted images and index them.
+        
+        Args:
+            images_info: List of dictionaries with image information
+            index_name: Optional name for the index
+            
+        Returns:
+            Index name/ID
+        """
+        if not images_info:
+            logger.warning("No extracted images to process")
+            return ""
+            
+        image_paths = [Path(img["path"]) for img in images_info if "path" in img]
+        if not image_paths:
+            logger.warning("No valid image paths found in extracted images")
+            return ""
+            
+        logger.info(f"Processing {len(image_paths)} extracted images")
+        processor = self._lazy_init_document_processor()
+        
+        # Use a dedicated index name for extracted images if not provided
+        if index_name is None:
+            index_name = f"{RETRIEVAL_SETTINGS['colivara_index_name']}_images"
+        
+        # Process images
+        documents = await processor.process_all(image_paths)
+        
+        # Index documents
+        index_id = await processor.index_documents(documents, index_name)
+        
+        logger.info(f"Processed and indexed {len(documents)} images to {index_name}")
         return index_id
     
     async def query(self, query: str, index_name: Optional[str] = None) -> Dict[str, Any]:
@@ -193,14 +230,21 @@ class MultimodalRAG:
         logger.info(f"Processing website {url} and querying: '{query}'")
         
         # 1. Crawl the website
-        screenshots, _ = await self.crawl_website(url, max_depth, max_pages)
+        _, screenshots, extracted_images = await self.crawl_website(url, max_depth, max_pages)
         
         # 2. Process and index screenshots
-        index_name = f"website_{int(time.time())}"
-        await self.process_website_screenshots(screenshots, index_name)
+        timestamp = int(time.time())
+        screenshots_index_name = f"website_{timestamp}"
+        await self.process_website_screenshots(screenshots, screenshots_index_name)
         
-        # 3. Query the indexed website
-        result = await self.query(query, index_name)
+        # 3. Process and index extracted images if enabled
+        if DOCUMENT_PROCESSOR_SETTINGS.get("process_extracted_images", True) and extracted_images:
+            images_index_name = f"images_{timestamp}"
+            await self.process_extracted_images(extracted_images, images_index_name)
+            logger.info(f"Indexed {len(extracted_images)} extracted images to {images_index_name}")
+        
+        # 4. Query the indexed website
+        result = await self.query(query, screenshots_index_name)
         
         return result
     
@@ -222,10 +266,12 @@ async def main():
     crawl_parser.add_argument("url", help="URL to crawl")
     crawl_parser.add_argument("--depth", type=int, default=2, help="Maximum crawl depth")
     crawl_parser.add_argument("--max-pages", type=int, default=20, help="Maximum number of pages to crawl")
+    crawl_parser.add_argument("--extract-images", action="store_true", help="Extract images from pages")
     
     # Process command
     process_parser = subparsers.add_parser("process", help="Process screenshots and index them")
     process_parser.add_argument("--screenshots-dir", default=None, help="Directory containing screenshots")
+    process_parser.add_argument("--images-dir", default=None, help="Directory containing extracted images")
     process_parser.add_argument("--index-name", default=None, help="Name for the index")
     
     # Query command
@@ -239,11 +285,13 @@ async def main():
     pipeline_parser.add_argument("query", help="Query to process")
     pipeline_parser.add_argument("--depth", type=int, default=2, help="Maximum crawl depth")
     pipeline_parser.add_argument("--max-pages", type=int, default=20, help="Maximum number of pages to crawl")
+    pipeline_parser.add_argument("--extract-images", action="store_true", help="Extract images from pages")
     
     # Interactive mode
     interactive_parser = subparsers.add_parser("interactive", help="Run in interactive mode")
     interactive_parser.add_argument("--url", default=None, help="URL to crawl (optional)")
     interactive_parser.add_argument("--index-name", default=None, help="Name of the index to query (optional)")
+    interactive_parser.add_argument("--extract-images", action="store_true", help="Extract images from pages")
     
     # Parse arguments
     args = parser.parse_args()
@@ -253,9 +301,17 @@ async def main():
     
     try:
         if args.command == "crawl":
-            screenshots, pdfs = await rag.crawl_website(args.url, args.depth, args.max_pages)
+            # Override image extraction setting if specified
+            if hasattr(args, "extract_images") and args.extract_images:
+                CRAWLER_SETTINGS["extract_images"] = True
+                
+            saved_files, screenshots, extracted_images = await rag.crawl_website(
+                args.url, args.depth, args.max_pages
+            )
             print(f"Crawled {len(screenshots)} pages")
+            print(f"Extracted {len(extracted_images)} images")
             print(f"Screenshots saved to: {SCREENSHOTS_DIR}")
+            print(f"Extracted images saved to: {IMAGES_DIR}")
             print(f"PDFs saved to: {PDFS_DIR}")
             
         elif args.command == "process":
@@ -270,9 +326,24 @@ async def main():
                 print(f"No screenshots found in {screenshots_dir}")
                 return
             
-            index_id = await rag.process_website_screenshots(screenshots, args.index_name)
-            print(f"Processed {len(screenshots)} screenshots and indexed them with ID: {index_id}")
+            # Process screenshots
+            screenshots_index_id = await rag.process_website_screenshots(screenshots, args.index_name)
+            print(f"Processed {len(screenshots)} screenshots and indexed them with ID: {screenshots_index_id}")
             
+            # Process extracted images if directory is specified
+            if args.images_dir:
+                images_dir = Path(args.images_dir)
+                image_files = []
+                for ext in CRAWLER_SETTINGS.get("image_formats", ["jpg", "jpeg", "png", "webp", "gif"]):
+                    image_files.extend(list(images_dir.glob(f"*.{ext}")))
+                
+                if image_files:
+                    images_info = [{"path": str(path)} for path in image_files]
+                    images_index_id = await rag.process_extracted_images(
+                        images_info, f"{args.index_name}_images" if args.index_name else None
+                    )
+                    print(f"Processed {len(image_files)} extracted images and indexed them with ID: {images_index_id}")
+                    
         elif args.command == "query":
             result = await rag.query(args.query, args.index_name)
             print(f"\nQuery: {result['query']}")
@@ -282,6 +353,10 @@ async def main():
                   f"Results: {result['metrics']['num_results']}")
             
         elif args.command == "pipeline":
+            # Override image extraction setting if specified
+            if hasattr(args, "extract_images") and args.extract_images:
+                CRAWLER_SETTINGS["extract_images"] = True
+                
             result = await rag.process_website_and_query(args.url, args.query, args.depth, args.max_pages)
             print(f"\nQuery: {result['query']}")
             print(f"\nResponse: {result['response']}")
@@ -291,11 +366,30 @@ async def main():
             
         elif args.command == "interactive":
             # Interactive mode
+            # Override image extraction setting if specified
+            if hasattr(args, "extract_images") and args.extract_images:
+                CRAWLER_SETTINGS["extract_images"] = True
+                
             if args.url:
                 print(f"Crawling {args.url}...")
-                screenshots, _ = await rag.crawl_website(args.url, max_depth=2, max_pages=20)
-                index_name = f"website_{int(time.time())}"
-                await rag.process_website_screenshots(screenshots, index_name)
+                saved_files, screenshots, extracted_images = await rag.crawl_website(
+                    args.url, max_depth=2, max_pages=20
+                )
+                
+                # Generate unique index names based on timestamp
+                timestamp = int(time.time())
+                screenshots_index_name = f"website_{timestamp}"
+                
+                # Process and index screenshots
+                await rag.process_website_screenshots(screenshots, screenshots_index_name)
+                
+                # Process and index extracted images if available
+                if DOCUMENT_PROCESSOR_SETTINGS.get("process_extracted_images", True) and extracted_images:
+                    images_index_name = f"images_{timestamp}"
+                    await rag.process_extracted_images(extracted_images, images_index_name)
+                    print(f"Extracted and indexed {len(extracted_images)} images")
+                
+                index_name = screenshots_index_name
                 print(f"Crawled and processed {len(screenshots)} pages from {args.url}")
             else:
                 index_name = args.index_name
@@ -319,4 +413,4 @@ async def main():
         await rag.close()
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
