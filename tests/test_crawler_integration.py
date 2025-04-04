@@ -11,8 +11,11 @@ from loguru import logger
 from src.crawler.crawler import WebsiteCrawler
 from config.config import CRAWLER_SETTINGS, SCREENSHOTS_DIR, PDFS_DIR
 
+# Mark all tests in this file as integration tests and crawler tests
+pytestmark = [pytest.mark.integration, pytest.mark.crawler, pytest.mark.slow]
+
 # Skip these tests if the FIRECRAWL_API_KEY is not set
-pytestmark = pytest.mark.skipif(
+pytestmark += pytest.mark.skipif(
     os.getenv("FIRECRAWL_API_KEY") is None,
     reason="FIRECRAWL_API_KEY environment variable not set"
 )
@@ -117,6 +120,7 @@ class TestCrawlerIntegration:
             crawler.close()
 
     @pytest.mark.asyncio
+    @pytest.mark.slow
     async def test_crawl_with_depth(self):
         """Test crawling with depth > 1 on a site with multiple pages."""
         # Skip if running in CI environment to avoid long-running tests
